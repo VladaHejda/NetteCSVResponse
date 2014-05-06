@@ -8,82 +8,142 @@ use Nette;
  * CSV download response.
  * Under New BSD license.
  *
- * @property-read string $name
- * @property-read string $contentType
  * @package Nette\Application\Responses
  */
 class CsvResponse extends Nette\Object implements Nette\Application\IResponse
 {
+
+	const COMMA = ',',
+		SEMICOLON = ';',
+		TAB = '	';
+
 	/** @var array */
-	private $data;
+	protected $data;
 
 	/** @var string */
-	private $name;
+	protected $name;
 
 	/** @var bool */
-	public $addHeading;
+	protected $addHeading;
 
 	/** @var string */
-	public $glue;
+	protected $glue = self::COMMA;
 
 	/** @var string */
-	private $charset;
+	protected $outputCharset;
 
 	/** @var string */
-	private $contentType;
+	protected $contentType = 'text/csv';
+
+	/** @var callable */
+	protected $headingFormatter, $dataFormatter;
 
 
 	/**
+	 * In accordance with Nette Framework accepts only UTF-8 input. For output @see setOutputCharset().
 	 * @param array[]|\Traversable $data
 	 * @param string $name
 	 * @param bool $addHeading
-	 * @param string $glue
-	 * @param string $charset
-	 * @param string $contentType
 	 * @throws \InvalidArgumentException
 	 */
-	public function __construct($data, $name = NULL, $addHeading = TRUE, $glue = ';', $charset = 'utf-8', $contentType = NULL)
+	public function __construct($data, $name = 'output.csv', $addHeading = TRUE)
 	{
-		if (is_array($data)) {
-			if (count($data) && !is_array(reset($data))) {
-				$invalid = TRUE;
-			}
-		} elseif (!$data instanceof \Traversable) {
+		if ($data instanceof \Traversable) {
+			$data = iterator_to_array($data);
+		}
+
+		if (!is_array($data)) {
 			$invalid = TRUE;
 		}
+
 		if (isset($invalid)) {
-			throw new \InvalidArgumentException(__CLASS__.": data must be array of arrays or instance of Traversable.");
-		}
-		if (empty($glue) || preg_match('/^[\n\r]+$/s', $glue) || $glue === '"') {
-			throw new \InvalidArgumentException(__CLASS__.": glue cannot be an empty or reserved character.");
+			throw new \InvalidArgumentException(__CLASS__.": data must be two dimensional array or instance of Traversable.");
 		}
 
-		$this->data = $data;
+		$this->data = array_values($data);
 		$this->name = $name;
 		$this->addHeading = $addHeading;
+
+		$this->setHeadingFormatter(__CLASS__.'::firstUpperNoUnderscoresFormatter');
+	}
+
+
+	/**
+	 * @param string $glue
+	 * @return self
+	 * @throws \InvalidArgumentException
+	 */
+	public function setGlue($glue)
+	{
+		if (empty($glue) || preg_match('/[\n\r"]/s', $glue)) {
+			throw new \InvalidArgumentException(__CLASS__.": glue cannot be an empty or reserved character.");
+		}
 		$this->glue = $glue;
-		$this->charset = $charset;
-		$this->contentType = $contentType ? $contentType : 'text/csv';
+		return $this;
 	}
 
 
 	/**
-	 * Returns the file name.
-	 * @return string
+	 * @param string $charset
+	 * @return self
 	 */
-	final public function getName()
+	public function setOutputCharset($charset)
 	{
-		return $this->name;
+		$this->outputCharset = $charset;
+		return $this;
 	}
 
 
 	/**
-	 * Returns the MIME content type of a downloaded content.
+	 * @param string $contentType
+	 * @return self
+	 */
+	public function setContentType($contentType)
+	{
+		$this->contentType = $contentType;
+		return $this;
+	}
+
+
+	/**
+	 * @param callable $formatter
+	 * @return self
+	 * @throws \InvalidArgumentException
+	 */
+	public function setHeadingFormatter($formatter)
+	{
+		if (!is_callable($formatter)) {
+			throw new \InvalidArgumentException(__CLASS__.": heading formatter must be callable.");
+		}
+		$this->headingFormatter = $formatter;
+		return $this;
+	}
+
+
+	/**
+	 * @param callable $formatter
+	 * @return self
+	 * @throws \InvalidArgumentException
+	 */
+	public function setDataFormatter($formatter)
+	{
+		if (!is_callable($formatter)) {
+			throw new \InvalidArgumentException(__CLASS__.": data formatter must be callable.");
+		}
+		$this->dataFormatter = $formatter;
+		return $this;
+	}
+
+
+	/**
+	 * @param string $heading
 	 * @return string
 	 */
-	final public function getContentType()
+	public static function firstUpperNoUnderscoresFormatter($heading)
 	{
-		return $this->contentType;
+		$heading = str_replace("_", ' ', $heading);
+		$heading = mb_strtoupper(mb_substr($heading, 0, 1)) . mb_substr($heading, 1);
+		return $heading;
 	}
 
 
@@ -94,7 +154,7 @@ class CsvResponse extends Nette\Object implements Nette\Application\IResponse
 	 */
 	public function send(Nette\Http\IRequest $httpRequest, Nette\Http\IResponse $httpResponse)
 	{
-		$httpResponse->setContentType($this->contentType, $this->charset);
+		$httpResponse->setContentType($this->contentType, $this->outputCharset);
 
 		if (empty($this->name)) {
 			$httpResponse->setHeader('Content-Disposition', 'attachment');
@@ -115,35 +175,49 @@ class CsvResponse extends Nette\Object implements Nette\Application\IResponse
 			return '';
 		}
 
-		$csv = array();
+		ob_start();
+		$buffer = fopen("php://output", 'w');
+		// if output charset is not UTF-8
+		$recode = $this->outputCharset && strcasecmp($this->outputCharset, 'utf-8');
 
-		if (!is_array($this->data)) {
-			$this->data = iterator_to_array($this->data);
-		}
-		$firstRow = reset($this->data);
-
-		if ($this->addHeading) {
-			if (!is_array($firstRow)) {
-				$firstRow = iterator_to_array($firstRow);
-			}
-
-			$labels = array();
-			foreach (array_keys($firstRow) as $key) {
-				$labels[] = ucfirst(str_replace(array("_", '"'), array(' ', '""'), $key));
-			}
-			$csv[] = '"'.join('"'.$this->glue.'"', $labels).'"';
-		}
-
-		foreach ($this->data as $row) {
-			if (!is_array($row)) {
+		foreach ($this->data as $n => $row) {
+			if ($row instanceof \Traversable) {
 				$row = iterator_to_array($row);
 			}
-			foreach ($row as &$value) {
-				$value = str_replace(array('"'), array('""'), $value);
+			if (!is_array($row)) {
+				throw new \InvalidArgumentException(__CLASS__.": row $n must be array or instance of Traversable, " . gettype($row) . ' given.');
 			}
-			$csv[] = '"'.join('"'.$this->glue.'"', $row).'"';
+
+			if ($n === 0 && $this->addHeading) {
+				$labels = array_keys($row);
+				if ($this->headingFormatter || $recode) {
+					foreach ($labels as &$label) {
+						if ($this->headingFormatter) {
+							$label = call_user_func($this->headingFormatter, $label);
+						}
+						if ($recode) {
+							$label = iconv('utf-8', "$this->outputCharset//TRANSLIT", $label);
+						}
+					}
+				}
+				fputcsv($buffer, $labels, $this->glue);
+			}
+
+			if ($this->dataFormatter || $recode) {
+				foreach ($row as &$value) {
+					if ($this->dataFormatter) {
+						$value = call_user_func($this->dataFormatter, $value);
+					}
+					if ($recode) {
+						$value = iconv('utf-8', "$this->outputCharset//TRANSLIT", $value);
+					}
+				}
+			}
+
+			fputcsv($buffer, $row, $this->glue);
 		}
 
-		return join("\r\n", $csv);
+		fclose($buffer);
+		return ob_get_clean();
 	}
 }
