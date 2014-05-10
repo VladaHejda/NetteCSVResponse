@@ -13,15 +13,10 @@ use Nette;
 class CsvResponse extends Nette\Object implements Nette\Application\IResponse
 {
 
+	/** standard glues */
 	const COMMA = ',',
 		SEMICOLON = ';',
 		TAB = '	';
-
-	/** @var array */
-	protected $data;
-
-	/** @var string */
-	protected $name;
 
 	/** @var bool */
 	protected $addHeading;
@@ -30,23 +25,32 @@ class CsvResponse extends Nette\Object implements Nette\Application\IResponse
 	protected $glue = self::COMMA;
 
 	/** @var string */
-	protected $outputCharset;
+	protected $outputCharset = 'utf-8';
 
 	/** @var string */
 	protected $contentType = 'text/csv';
 
 	/** @var callable */
-	protected $headingFormatter, $dataFormatter;
+	protected $headingFormatter = 'self::firstUpperNoUnderscoresFormatter';
+
+	/** @var callable */
+	protected $dataFormatter;
+
+	/** @var array */
+	protected $data;
+
+	/** @var string */
+	protected $filename;
 
 
 	/**
 	 * In accordance with Nette Framework accepts only UTF-8 input. For output @see setOutputCharset().
 	 * @param array[]|\Traversable $data
-	 * @param string $name
-	 * @param bool $addHeading
+	 * @param string $filename
+	 * @param bool $addHeading whether add first row from data array keys (keys are taken from first row)
 	 * @throws \InvalidArgumentException
 	 */
-	public function __construct($data, $name = 'output.csv', $addHeading = TRUE)
+	public function __construct($data, $filename = 'output.csv', $addHeading = TRUE)
 	{
 		if ($data instanceof \Traversable) {
 			$data = iterator_to_array($data);
@@ -61,14 +65,13 @@ class CsvResponse extends Nette\Object implements Nette\Application\IResponse
 		}
 
 		$this->data = array_values($data);
-		$this->name = $name;
+		$this->filename = $filename;
 		$this->addHeading = $addHeading;
-
-		$this->setHeadingFormatter(__CLASS__.'::firstUpperNoUnderscoresFormatter');
 	}
 
 
 	/**
+	 * Value separator.
 	 * @param string $glue
 	 * @return self
 	 * @throws \InvalidArgumentException
@@ -106,13 +109,15 @@ class CsvResponse extends Nette\Object implements Nette\Application\IResponse
 
 
 	/**
+	 * When heading added, it is formatted by given callback.
+	 * Default @see firstUpperNoUnderscoresFormatter(); erase it by calling setHeadingFormatter(NULL).
 	 * @param callable $formatter
 	 * @return self
 	 * @throws \InvalidArgumentException
 	 */
 	public function setHeadingFormatter($formatter)
 	{
-		if (!is_callable($formatter)) {
+		if ($formatter !== NULL && !is_callable($formatter)) {
 			throw new \InvalidArgumentException(__CLASS__.": heading formatter must be callable.");
 		}
 		$this->headingFormatter = $formatter;
@@ -121,13 +126,14 @@ class CsvResponse extends Nette\Object implements Nette\Application\IResponse
 
 
 	/**
+	 * If given, every value is formatted by given callback.
 	 * @param callable $formatter
 	 * @return self
 	 * @throws \InvalidArgumentException
 	 */
 	public function setDataFormatter($formatter)
 	{
-		if (!is_callable($formatter)) {
+		if ($formatter !== NULL && !is_callable($formatter)) {
 			throw new \InvalidArgumentException(__CLASS__.": data formatter must be callable.");
 		}
 		$this->dataFormatter = $formatter;
@@ -156,11 +162,11 @@ class CsvResponse extends Nette\Object implements Nette\Application\IResponse
 	{
 		$httpResponse->setContentType($this->contentType, $this->outputCharset);
 
-		if (empty($this->name)) {
-			$httpResponse->setHeader('Content-Disposition', 'attachment');
-		} else {
-			$httpResponse->setHeader('Content-Disposition', 'attachment; filename="' . $this->name . '"');
+		$attachment = 'attachment';
+		if (!empty($this->filename)) {
+			$attachment .= '; filename="' . $this->filename . '"';
 		}
+		$httpResponse->setHeader('Content-Disposition', $attachment);
 
 		$data = $this->formatCsv();
 
@@ -178,7 +184,7 @@ class CsvResponse extends Nette\Object implements Nette\Application\IResponse
 		ob_start();
 		$buffer = fopen("php://output", 'w');
 		// if output charset is not UTF-8
-		$recode = $this->outputCharset && strcasecmp($this->outputCharset, 'utf-8');
+		$recode = strcasecmp($this->outputCharset, 'utf-8');
 
 		foreach ($this->data as $n => $row) {
 			if ($row instanceof \Traversable) {
