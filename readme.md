@@ -1,4 +1,4 @@
-CSV Response.
+CSV Response
 =============
 
 Use:
