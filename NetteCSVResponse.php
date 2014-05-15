@@ -57,10 +57,6 @@ class CsvResponse extends Nette\Object implements Nette\Application\IResponse
 		}
 
 		if (!is_array($data)) {
-			$invalid = TRUE;
-		}
-
-		if (isset($invalid)) {
 			throw new \InvalidArgumentException(__CLASS__.": data must be two dimensional array or instance of Traversable.");
 		}
 
